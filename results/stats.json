@@ -137,5 +137,99 @@
                 }
             }
         }
+    },
+    {
+        "Parallel_Distributed": {
+            "time_seconds": 5.511579256970435,
+            "num_servers": 2,
+            "num_cores": "distributed",
+            "block_size": 64,
+            "matrix_dimensions": {
+                "A": [
+                    500,
+                    500
+                ],
+                "B": [
+                    500,
+                    500
+                ],
+                "C": [
+                    500,
+                    500
+                ]
+            },
+            "benchmark": {
+                "system_info": {
+                    "platform": "Linux",
+                    "platform_release": "6.16.3-76061603-generic",
+                    "platform_version": "#202508231538~1758561135~22.04~171c8de SMP PREEMPT_DYNAMIC Mon S",
+                    "architecture": "x86_64",
+                    "processor": "x86_64",
+                    "cpu_frequency": "Unknown",
+                    "cpu_cores": 4,
+                    "cpu_threads": 8,
+                    "ram_total_gb": 23.23
+                },
+                "integer_benchmark": {
+                    "operations": 10000000,
+                    "time_seconds": 0.003043195989448577,
+                    "ops_per_second": 3286019051.9020715,
+                    "result": 1291865006568070912
+                },
+                "float_benchmark": {
+                    "operations": 10000000,
+                    "time_seconds": 0.03168604598613456,
+                    "ops_per_second": 315596335.509198,
+                    "result": 53281946088618.414
+                }
+            }
+        }
+    },
+    {
+        "Parallel_Distributed": {
+            "time_seconds": 9.277570989972446,
+            "num_servers": 2,
+            "num_cores": "distributed",
+            "block_size": 64,
+            "matrix_dimensions": {
+                "A": [
+                    500,
+                    500
+                ],
+                "B": [
+                    500,
+                    500
+                ],
+                "C": [
+                    500,
+                    500
+                ]
+            },
+            "benchmark": {
+                "system_info": {
+                    "platform": "Linux",
+                    "platform_release": "6.16.3-76061603-generic",
+                    "platform_version": "#202508231538~1758561135~22.04~171c8de SMP PREEMPT_DYNAMIC Mon S",
+                    "architecture": "x86_64",
+                    "processor": "x86_64",
+                    "cpu_frequency": "Unknown",
+                    "cpu_cores": 4,
+                    "cpu_threads": 8,
+                    "ram_total_gb": 23.23
+                },
+                "integer_benchmark": {
+                    "operations": 10000000,
+                    "time_seconds": 0.003421709989197552,
+                    "ops_per_second": 2922515359.738353,
+                    "result": 1291865006568070912
+                },
+                "float_benchmark": {
+                    "operations": 10000000,
+                    "time_seconds": 0.03358790196944028,
+                    "ops_per_second": 297726247.06057644,
+                    "result": 53281946088618.414
+                }
+            }
+        }
     }
 ]
