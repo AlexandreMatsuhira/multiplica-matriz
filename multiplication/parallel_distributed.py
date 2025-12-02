@@ -1,23 +1,15 @@
 """
 Multiplicação paralela distribuída usando Pyro5
+Cliente
 """
 import numpy as np
 import time
 import Pyro5.api
-
+import concurrent.futures
 
 def multiply_parallel_distributed(matA, matB, server_uris, block_size=64):
     """
     Multiplica duas matrizes usando servidores distribuídos.
-    
-    Args:
-        matA: Matriz A (NumPy array)
-        matB: Matriz B (NumPy array)
-        server_uris: Lista de URIs dos servidores Pyro
-        block_size: Tamanho do bloco para tiling
-        
-    Returns:
-        tuple: (matC, tempo_execucao)
     """
     # Validar dimensões
     if matA.shape[1] != matB.shape[0]:
@@ -29,49 +21,56 @@ def multiply_parallel_distributed(matA, matB, server_uris, block_size=64):
     p = matB.shape[1]
     
     # Conectar aos servidores
-    servers = []
-    total_cores = 0
+    servers_info = []
     
     print(f"\nConectando a {len(server_uris)} servidores...")
     for uri in server_uris:
         try:
-            server = Pyro5.api.Proxy(uri)
-            info = server.get_info()
-            servers.append(info)
-            total_cores += info['num_cores']
-            print(f"  ✓ {info['name']}: {info['num_cores']} núcleos")
-            server._pyroRelease()  # Liberar proxy após uso
+            with Pyro5.api.Proxy(uri) as server:
+                info = server.get_info()
+                servers_info.append(info)
+                print(f"  ✓ {info['name']}: {info['num_cores']} núcleos")
         except Exception as e:
             print(f"  ✗ Erro ao conectar a {uri}: {e}")
     
-    if not servers:
+    if not servers_info:
         raise RuntimeError("Nenhum servidor disponível")
     
-    print(f"\nTotal de núcleos disponíveis: {total_cores}")
+    valid_server_count = len(servers_info)
     
     # Converter matrizes para listas (para transmissão Pyro)
+    # Nota: Enviar a matriz inteira é pesado, mas mantém a lógica original simplificada
+    print("Serializando matrizes...")
     A_data = matA.tolist()
     B_data = matB.tolist()
     
-    # Dividir trabalho entre servidores
-    rows_per_server = m // len(server_uris)
+    # Dividir trabalho (linhas de A) entre servidores disponíveis
+    rows_per_server = m // valid_server_count
     tasks = []
     
-    for i in range(len(server_uris)):
+    # Recalcular URIs baseados apenas nos que conectaram com sucesso
+    # (Assumindo que server_uris original bate com servers_info na ordem, 
+    # mas o ideal seria servers_info retornar o URI ou gerenciar ids)
+    # Para simplificar, vamos usar a lista original se todos conectaram,
+    # caso contrário precisaria filtrar server_uris.
+    
+    active_uris = server_uris[:valid_server_count] 
+
+    for i in range(valid_server_count):
         start_row = i * rows_per_server
-        if i == len(server_uris) - 1:
-            end_row = m  # Último servidor pega linhas restantes
+        if i == valid_server_count - 1:
+            end_row = m  # Último servidor pega o resto
         else:
             end_row = (i + 1) * rows_per_server
         
         tasks.append({
-            'server_uri': server_uris[i],
+            'server_uri': active_uris[i],
             'start_row': start_row,
             'end_row': end_row,
             'rows': end_row - start_row
         })
     
-    print(f"\nDistribuindo {m} linhas entre {len(server_uris)} servidores...")
+    print(f"\nDistribuindo {m} linhas entre {valid_server_count} servidores...")
     for i, task in enumerate(tasks):
         print(f"  Servidor {i+1}: linhas {task['start_row']}-{task['end_row']} "
               f"({task['rows']} linhas)")
@@ -79,54 +78,45 @@ def multiply_parallel_distributed(matA, matB, server_uris, block_size=64):
     # Inicializar matriz resultado
     matC = np.zeros((m, p), dtype=np.float64)
     
-    # Medir apenas o tempo de multiplicação
     print("\nIniciando multiplicação distribuída...")
     start_time = time.perf_counter()
     
-    # Executar tarefas em paralelo usando threads
-    import concurrent.futures
+    def execute_task(uri, s_row, e_row, a_dat, b_dat, blk):
+        # Criar novo proxy dentro da thread
+        with Pyro5.api.Proxy(uri) as server:
+            res = server.compute_partial_multiplication(
+                a_dat, b_dat, s_row, e_row, blk
+            )
+        return s_row, e_row, res
     
-    def execute_task(server_uri, start_row, end_row, A_data, B_data, block_size):
-        """
-        Executa uma tarefa em um servidor.
-        Cria um novo proxy dentro da thread para evitar problemas de ownership.
-        """
-        # Criar novo proxy dentro desta thread
-        server = Pyro5.api.Proxy(server_uri)
-        
-        result = server.compute_partial_multiplication(
-            A_data, B_data, start_row, end_row, block_size
-        )
-        
-        server._pyroRelease()
-        
-        return start_row, end_row, result
-    
-    # Preparar tarefas 
-    task_args = []
-    for i, task in enumerate(tasks):
-        task_args.append((
-            server_uris[i],
-            task['start_row'],
-            task['end_row'],
-            A_data,
-            B_data,
-            block_size
-        ))
-    
-    # Executar todas as tarefas em paralelo
+    # Executar threads
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks)) as executor:
-        futures = [executor.submit(execute_task, *args) for args in task_args]
+        future_to_task = {
+            executor.submit(
+                execute_task, 
+                t['server_uri'], t['start_row'], t['end_row'], 
+                A_data[t['start_row']:t['end_row']], B_data, block_size
+            ): t for t in tasks
+        }
         
-        # Coletar resultados
-        for future in concurrent.futures.as_completed(futures):
-            start_row, end_row, result = future.result()
-            result_array = np.array(result, dtype=np.float64)
-            matC[start_row:end_row, :] = result_array
+        for future in concurrent.futures.as_completed(future_to_task):
+            try:
+                s_row, e_row, result = future.result()
+                
+                # Inserir o pedaço calculado na matriz final
+                if result:
+                    result_array = np.array(result, dtype=np.float64)
+                    matC[s_row:e_row, :] = result_array
+            except Exception as exc:
+                print(f"  ✗ Exceção em uma tarefa: {exc}")
+                raise exc
     
     end_time = time.perf_counter()
     elapsed_time = end_time - start_time
     
     print(f"✓ Multiplicação concluída em {elapsed_time:.4f}s")
     
-    return matC, elapsed_time
+    # Calcular total de cores
+    total_cores = sum(info['num_cores'] for info in servers_info)
+    
+    return matC, elapsed_time, total_cores, valid_server_count

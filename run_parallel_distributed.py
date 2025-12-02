@@ -143,7 +143,7 @@ def main():
     print(f"  Block size: {args.block_size}")
     
     try:
-        matC, elapsed_time = multiply_parallel_distributed(
+        matC, elapsed_time, total_cores, num_servers = multiply_parallel_distributed(
             matA, matB, server_uris, args.block_size
         )
         
@@ -170,8 +170,8 @@ def main():
     stats = {
         "Parallel_Distributed": {
             "time_seconds": elapsed_time,
-            "num_servers": len(server_uris),
-            "num_cores": "distributed",  # Será calculado na análise
+            "num_servers": num_servers,
+            "num_cores": total_cores, 
             "block_size": args.block_size,
             "matrix_dimensions": {
                 "A": list(matA.shape),

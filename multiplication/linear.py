@@ -20,7 +20,8 @@ def _multiply_kernel(A, B, C, block_size):
     m, n = A.shape
     p = B.shape[1]
     
-    # Loop tiling para melhor uso de cache
+    # Loop tiling para melhor uso de cache]
+#  C[i,j]=k=0∑n−1​A[i,k]⋅B[k,j]
     for i0 in range(0, m, block_size):
         for j0 in range(0, p, block_size):
             for k0 in range(0, n, block_size):
