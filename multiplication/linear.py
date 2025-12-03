@@ -7,7 +7,7 @@ import time
 
 
 @jit(nopython=True, cache=True)
-def _multiply_kernel(A, B, C, block_size):
+def _multiply_kernel(A, B, C, tamanho_bloco):
     """
     Kernel otimizado para multiplicação de matrizes usando tiling.
     
@@ -17,26 +17,26 @@ def _multiply_kernel(A, B, C, block_size):
         C: Matriz C resultado (m x p)
         block_size: Tamanho do bloco para cache blocking
     """
-    m, n = A.shape
-    p = B.shape[1]
+    linhas_A, colunas_A = A.shape
+    colunas_B = B.shape[1]
     
     # Loop tiling para melhor uso de cache]
 #  C[i,j]=k=0∑n−1​A[i,k]⋅B[k,j]
-    for i0 in range(0, m, block_size):
-        for j0 in range(0, p, block_size):
-            for k0 in range(0, n, block_size):
+    for inicio_bloco_linha in range(0, linhas_A, tamanho_bloco):
+        for inicio_bloco_col in range(0, colunas_B, tamanho_bloco):
+            for inicio_bloco_k in range(0, colunas_A, tamanho_bloco):
                 # Limites dos blocos
-                i_max = min(i0 + block_size, m)
-                j_max = min(j0 + block_size, p)
-                k_max = min(k0 + block_size, n)
+                fim_bloco_linha = min(inicio_bloco_linha + tamanho_bloco, linhas_A)
+                fim_bloco_col = min(inicio_bloco_col + tamanho_bloco, colunas_B)
+                fim_bloco_k = min(inicio_bloco_k + tamanho_bloco, colunas_A)
                 
                 # Multiplicação do bloco
-                for i in range(i0, i_max):
-                    for j in range(j0, j_max):
+                for linha in range(inicio_bloco_linha, fim_bloco_linha):
+                    for coluna in range(inicio_bloco_col, fim_bloco_col):
                         temp = 0.0
-                        for k in range(k0, k_max):
-                            temp += A[i, k] * B[k, j]
-                        C[i, j] += temp
+                        for k_iter in range(inicio_bloco_k, fim_bloco_k):
+                            temp += A[linha, k_iter] * B[k_iter, coluna]
+                        C[linha, coluna] += temp
 
 
 def multiply_linear(matA, matB, block_size=64):
@@ -58,16 +58,16 @@ def multiply_linear(matA, matB, block_size=64):
         )
     
     # Inicializar matriz resultado
-    m, n = matA.shape
-    p = matB.shape[1]
-    matC = np.zeros((m, p), dtype=np.float64)
+    linhas_A, colunas_A = matA.shape
+    colunas_B = matB.shape[1]
+    matC = np.zeros((linhas_A, colunas_B), dtype=np.float64)
     
     # Warm-up para JIT compilation
     if matA.shape[0] > 10:
         _multiply_kernel(
-            matA[:10, :10] if n >= 10 else matA[:10, :n],
-            matB[:10, :10] if p >= 10 else matB[:n, :10],
-            np.zeros((10, 10 if p >= 10 else p), dtype=np.float64),
+            matA[:10, :10] if colunas_A >= 10 else matA[:10, :colunas_A],
+            matB[:10, :10] if colunas_B >= 10 else matB[:colunas_A, :10],
+            np.zeros((10, 10 if colunas_B >= 10 else colunas_B), dtype=np.float64),
             min(block_size, 10)
         )
     

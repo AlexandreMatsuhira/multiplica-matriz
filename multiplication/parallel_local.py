@@ -9,7 +9,7 @@ from multiprocessing import shared_memory
 
 
 @jit(nopython=True, cache=True)
-def _multiply_block_range(A, B, C, start_row, end_row, block_size):
+def _multiply_block_range(A, B, C, linha_inicial, linha_final, tamanho_bloco):
     """
     Multiplica um range de linhas da matriz.
     
@@ -21,24 +21,24 @@ def _multiply_block_range(A, B, C, start_row, end_row, block_size):
         end_row: Linha final (exclusiva)
         block_size: Tamanho do bloco para tiling
     """
-    n = A.shape[1]
-    p = B.shape[1]
+    colunas_A = A.shape[1]
+    colunas_B = B.shape[1]
     
-    for i in range(start_row, end_row):
-        for j0 in range(0, p, block_size):
-            for k0 in range(0, n, block_size):
-                j_max = min(j0 + block_size, p)
-                k_max = min(k0 + block_size, n)
+    for linha in range(linha_inicial, linha_final):
+        for inicio_bloco_col in range(0, colunas_B, tamanho_bloco):
+            for inicio_bloco_k in range(0, colunas_A, tamanho_bloco):
+                fim_bloco_col = min(inicio_bloco_col + tamanho_bloco, colunas_B)
+                fim_bloco_k = min(inicio_bloco_k + tamanho_bloco, colunas_A)
                 
-                for j in range(j0, j_max):
+                for coluna in range(inicio_bloco_col, fim_bloco_col):
                     temp = 0.0
-                    for k in range(k0, k_max):
-                        temp += A[i, k] * B[k, j]
-                    C[i, j] += temp
+                    for k_iter in range(inicio_bloco_k, fim_bloco_k):
+                        temp += A[linha, k_iter] * B[k_iter, coluna]
+                    C[linha, coluna] += temp
 
 
 def _worker_process(shm_A_name, shm_B_name, shm_C_name, shape_A, shape_B, 
-                    start_row, end_row, block_size):
+                    linha_inicial, linha_final, tamanho_bloco):
     """
     Processo worker para multiplicação paralela.
     
@@ -63,7 +63,7 @@ def _worker_process(shm_A_name, shm_B_name, shm_C_name, shape_A, shape_B,
     C = np.ndarray((shape_A[0], shape_B[1]), dtype=np.float64, buffer=shm_C.buf)
     
     # Executar multiplicação
-    _multiply_block_range(A, B, C, start_row, end_row, block_size)
+    _multiply_block_range(A, B, C, linha_inicial, linha_final, tamanho_bloco)
     
     # Fechar shared memories
     shm_A.close()
@@ -95,41 +95,41 @@ def multiply_parallel_local(matA, matB, num_cores=None, block_size=64):
         num_cores = mp.cpu_count()
     num_cores = min(num_cores, mp.cpu_count())
     
-    m, n = matA.shape
-    p = matB.shape[1]
+    linhas_A, colunas_A = matA.shape
+    colunas_B = matB.shape[1]
     
     # Criar shared memories
     shm_A = shared_memory.SharedMemory(create=True, size=matA.nbytes)
     shm_B = shared_memory.SharedMemory(create=True, size=matB.nbytes)
-    shm_C = shared_memory.SharedMemory(create=True, size=m * p * 8)
+    shm_C = shared_memory.SharedMemory(create=True, size=linhas_A * colunas_B * 8)
     
     # Copiar dados para shared memory
     np_A = np.ndarray(matA.shape, dtype=np.float64, buffer=shm_A.buf)
     np_B = np.ndarray(matB.shape, dtype=np.float64, buffer=shm_B.buf)
-    np_C = np.ndarray((m, p), dtype=np.float64, buffer=shm_C.buf)
+    np_C = np.ndarray((linhas_A, colunas_B), dtype=np.float64, buffer=shm_C.buf)
     
     np_A[:] = matA[:]
     np_B[:] = matB[:]
     np_C.fill(0.0)
     
     # Dividir trabalho entre processos
-    rows_per_process = m // num_cores
+    linhas_por_processo = linhas_A // num_cores
     processes = []
     
     # Medir apenas o tempo de multiplicação
     start_time = time.perf_counter()
     
     for i in range(num_cores):
-        start_row = i * rows_per_process
+        linha_inicial = i * linhas_por_processo
         if i == num_cores - 1:
-            end_row = m  # Último processo pega linhas restantes
+            linha_final = linhas_A  # Último processo pega linhas restantes
         else:
-            end_row = (i + 1) * rows_per_process
+            linha_final = (i + 1) * linhas_por_processo
         
         p = mp.Process(
             target=_worker_process,
             args=(shm_A.name, shm_B.name, shm_C.name, matA.shape, matB.shape,
-                  start_row, end_row, block_size)
+                  linha_inicial, linha_final, block_size)
         )
         processes.append(p)
         p.start()

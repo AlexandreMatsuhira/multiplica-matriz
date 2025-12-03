@@ -17,8 +17,8 @@ def multiply_parallel_distributed(matA, matB, server_uris, block_size=64):
             f"Dimensões incompatíveis: {matA.shape} x {matB.shape}"
         )
     
-    m, n = matA.shape
-    p = matB.shape[1]
+    total_linhas_A, total_colunas_A = matA.shape
+    total_colunas_B = matB.shape[1]
     
     # Conectar aos servidores
     servers_info = []
@@ -46,38 +46,38 @@ def multiply_parallel_distributed(matA, matB, server_uris, block_size=64):
     dtype_str = str(matA.dtype)
     
     # Dividir trabalho (linhas de A) entre servidores disponíveis
-    rows_per_server = m // valid_server_count
+    linhas_por_servidor = total_linhas_A // valid_server_count
     tasks = []
     
     # Recalcular URIs baseados apenas nos que conectaram com sucesso
     active_uris = server_uris[:valid_server_count] 
 
-    for i in range(valid_server_count):
-        start_row = i * rows_per_server
-        if i == valid_server_count - 1:
-            end_row = m  # Último servidor pega o resto
+    for indice_servidor in range(valid_server_count):
+        linha_inicial = indice_servidor * linhas_por_servidor
+        if indice_servidor == valid_server_count - 1:
+            linha_final = total_linhas_A  # Último servidor pega o resto
         else:
-            end_row = (i + 1) * rows_per_server
+            linha_final = (indice_servidor + 1) * linhas_por_servidor
         
         tasks.append({
-            'server_uri': active_uris[i],
-            'start_row': start_row,
-            'end_row': end_row,
-            'rows': end_row - start_row
+            'server_uri': active_uris[indice_servidor],
+            'start_row': linha_inicial,
+            'end_row': linha_final,
+            'rows': linha_final - linha_inicial
         })
     
-    print(f"\nDistribuindo {m} linhas entre {valid_server_count} servidores...")
+    print(f"\nDistribuindo {total_linhas_A} linhas entre {valid_server_count} servidores...")
     for i, task in enumerate(tasks):
         print(f"  Servidor {i+1}: linhas {task['start_row']}-{task['end_row']} "
               f"({task['rows']} linhas)")
     
     # Inicializar matriz resultado
-    matC = np.zeros((m, p), dtype=np.float64)
+    matC = np.zeros((total_linhas_A, total_colunas_B), dtype=np.float64)
     
     print("\nIniciando multiplicação distribuída...")
     start_time = time.perf_counter()
     
-    def execute_task(uri, s_row, e_row, a_chunk, b_bytes, b_shape, dt_str, blk):
+    def execute_task(uri, linha_ini, linha_fim, a_chunk, b_bytes, b_shape, dt_str, blk):
         # Criar novo proxy dentro da thread
         with Pyro5.api.Proxy(uri) as server:
             # Serializar apenas o pedaço de A necessário
@@ -86,9 +86,9 @@ def multiply_parallel_distributed(matA, matB, server_uris, block_size=64):
             
             res_bytes = server.compute_partial_multiplication(
                 a_bytes, b_bytes, a_shape, b_shape, dt_str, 
-                s_row, e_row, blk
+                linha_ini, linha_fim, blk
             )
-        return s_row, e_row, res_bytes
+        return linha_ini, linha_fim, res_bytes
     
     # Executar threads
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks)) as executor:
@@ -102,7 +102,7 @@ def multiply_parallel_distributed(matA, matB, server_uris, block_size=64):
         
         for future in concurrent.futures.as_completed(future_to_task):
             try:
-                s_row, e_row, result_bytes = future.result()
+                linha_ini, linha_fim, result_bytes = future.result()
                 
                 # Inserir o pedaço calculado na matriz final
                 if result_bytes:
@@ -114,10 +114,10 @@ def multiply_parallel_distributed(matA, matB, server_uris, block_size=64):
 
                     # Reconstrói o array numpy a partir dos bytes recebidos
                     # O shape é (linhas_processadas, colunas_B)
-                    rows_processed = e_row - s_row
-                    cols = p
+                    rows_processed = linha_fim - linha_ini
+                    cols = total_colunas_B
                     result_array = np.frombuffer(result_bytes, dtype=np.dtype(dtype_str)).reshape(rows_processed, cols)
-                    matC[s_row:e_row, :] = result_array
+                    matC[linha_ini:linha_fim, :] = result_array
             except Exception as exc:
                 print(f"  ✗ Exceção em uma tarefa: {exc}")
                 raise exc

@@ -13,42 +13,42 @@ from numba import jit
 #   MULTIPLICAÇÃO COM OFFSET
 # ================================
 @jit(nopython=True, cache=True)
-def _multiply_block_range(A, B, C, start_row, end_row, block_size, offset):
+def _multiply_block_range(A, B, C, linha_global_inicial, linha_global_final, tamanho_bloco, offset):
     """
-    Multiplica o intervalo global [start_row, end_row).
+    Multiplica o intervalo global [linha_global_inicial, linha_global_final).
     O resultado é gravado em C na posição relativa (i - offset).
     """
-    n = A.shape[1]
-    p = B.shape[1]
+    colunas_A = A.shape[1]
+    colunas_B = B.shape[1]
     
     # Loop nas linhas globais da matriz A
-    for i in range(start_row, end_row):
+    for linha_global in range(linha_global_inicial, linha_global_final):
         # Índice local dentro do buffer de resultado deste servidor
-        local_i = i - offset 
+        linha_local = linha_global - offset 
         
-        for j0 in range(0, p, block_size):
-            for k0 in range(0, n, block_size):
-                j_max = min(j0 + block_size, p)
-                k_max = min(k0 + block_size, n)
+        for inicio_bloco_col in range(0, colunas_B, tamanho_bloco):
+            for inicio_bloco_k in range(0, colunas_A, tamanho_bloco):
+                fim_bloco_col = min(inicio_bloco_col + tamanho_bloco, colunas_B)
+                fim_bloco_k = min(inicio_bloco_k + tamanho_bloco, colunas_A)
                 
-                for j in range(j0, j_max):
+                for coluna in range(inicio_bloco_col, fim_bloco_col):
                     temp = 0.0
-                    for k in range(k0, k_max):
+                    for k_iter in range(inicio_bloco_k, fim_bloco_k):
                         # Acesso a A deve ser pelo índice local (já que A é um slice)
                         # Se A fosse a matriz completa, seria A[i, k]
-                        # Como A é slice [start_row:end_row], o índice 0 corresponde a start_row
-                        # Portanto, acessamos A[local_i, k]
-                        temp += A[local_i, k] * B[k, j]
+                        # Como A é slice [linha_global_inicial:linha_global_final], o índice 0 corresponde a linha_global_inicial
+                        # Portanto, acessamos A[linha_local, k]
+                        temp += A[linha_local, k_iter] * B[k_iter, coluna]
                     
                     # Acumula no buffer local
-                    C[local_i, j] += temp
+                    C[linha_local, coluna] += temp
 
 
 # ================================
 #   WORKER PROCESS
 # ================================
 def _worker_process(shm_A_name, shm_B_name, shm_C_name, shape_A, shape_B,
-                    worker_start, worker_end, server_total_rows, server_global_start, block_size):
+                    worker_start, worker_end, server_total_rows, server_global_start, tamanho_bloco):
     """
     Processo worker.
     
@@ -75,7 +75,7 @@ def _worker_process(shm_A_name, shm_B_name, shm_C_name, shape_A, shape_B,
     # O offset passado é o início global do servidor. 
     # Ex: Servidor pega linhas 100-200. Worker pega 100-150.
     # Linha 100 global - 100 offset = índice 0 no buffer C.
-    _multiply_block_range(A, B, C, worker_start, worker_end, block_size, offset=server_global_start)
+    _multiply_block_range(A, B, C, worker_start, worker_end, tamanho_bloco, offset=server_global_start)
     
     # Fechar conexões (não dar unlink aqui, pois o pai fará isso)
     shm_A.close()
@@ -108,8 +108,8 @@ class ComputationServer:
         return obj
 
     def compute_partial_multiplication(self, A_bytes, B_bytes, A_shape, B_shape, dtype_str, 
-                                      start_row, end_row, block_size=64):
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Recebido pedido de cálculo: linhas {start_row} a {end_row}")
+                                      linha_global_inicial, linha_global_final, tamanho_bloco=64):
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Recebido pedido de cálculo: linhas {linha_global_inicial} a {linha_global_final}")
         
         # Garantir que recebemos bytes (decodificar se Serpent enviou dict)
         A_bytes = self._ensure_bytes(A_bytes)
@@ -124,13 +124,13 @@ class ComputationServer:
         p = B.shape[1]
 
         # Garantir limites válidos
-        start_row = max(0, start_row)
+        linha_global_inicial = max(0, linha_global_inicial)
         # Como A é um slice, o número de linhas disponíveis é m.
-        # O intervalo solicitado [start_row, end_row) não pode exceder m linhas.
-        if (end_row - start_row) > m:
-            end_row = start_row + m
+        # O intervalo solicitado [linha_global_inicial, linha_global_final) não pode exceder m linhas.
+        if (linha_global_final - linha_global_inicial) > m:
+            linha_global_final = linha_global_inicial + m
             
-        num_rows_server = end_row - start_row
+        num_rows_server = linha_global_final - linha_global_inicial
         
         if num_rows_server <= 0:
             return b""
@@ -140,7 +140,7 @@ class ComputationServer:
         # -----------------------------------------
         if num_rows_server <= self.num_cores:
             result = np.zeros((num_rows_server, p), dtype=np.float64)
-            _multiply_block_range(A, B, result, start_row, end_row, block_size, offset=start_row)
+            _multiply_block_range(A, B, result, linha_global_inicial, linha_global_final, tamanho_bloco, offset=linha_global_inicial)
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Cálculo finalizado (local).")
             return result.tobytes()
         
@@ -174,8 +174,8 @@ class ComputationServer:
                 local_end = num_rows_server if i == self.num_cores - 1 else (i + 1) * rows_per_core
                 
                 # Converter para índices globais (Matriz A original)
-                worker_global_start = start_row + local_start
-                worker_global_end = start_row + local_end
+                worker_global_start = linha_global_inicial + local_start
+                worker_global_end = linha_global_inicial + local_end
                 
                 p_worker = mp.Process(
                     target=_worker_process,
@@ -185,8 +185,8 @@ class ComputationServer:
                         worker_global_start, # Onde este worker começa (global)
                         worker_global_end,   # Onde este worker termina (global)
                         num_rows_server,     # Altura total do buffer C local
-                        start_row,           # Offset global deste servidor (para subtração)
-                        block_size
+                        linha_global_inicial,           # Offset global deste servidor (para subtração)
+                        tamanho_bloco
                     )
                 )
                 processes.append(p_worker)
