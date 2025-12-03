@@ -73,7 +73,7 @@ def main():
             parts = server_str.split(':')
             if len(parts) == 2:
                 host, port = parts
-                server_name = f"server{i+1}"
+                server_name = "server"
                 uri = f"PYRO:{server_name}@{host}:{port}"
             else:
                 print(f"  ✗ Formato inválido para servidor: {server_str}")
@@ -83,7 +83,7 @@ def main():
             # Apenas porta, assume localhost
             try:
                 port = int(server_str)
-                server_name = f"server{i+1}"
+                server_name = "server"
                 uri = f"PYRO:{server_name}@localhost:{port}"
             except ValueError:
                 print(f"  ✗ Formato inválido para servidor: {server_str}")
