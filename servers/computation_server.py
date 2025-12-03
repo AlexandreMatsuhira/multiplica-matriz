@@ -100,12 +100,25 @@ class ComputationServer:
             "num_cores": self.num_cores
         }
     
-    def compute_partial_multiplication(self, A_data, B_data, start_row, end_row, 
-                                      block_size=64):
+    def _ensure_bytes(self, obj):
+        if isinstance(obj, dict) and 'data' in obj and 'encoding' in obj:
+            if obj['encoding'] == 'base64':
+                import base64
+                return base64.b64decode(obj['data'])
+        return obj
+
+    def compute_partial_multiplication(self, A_bytes, B_bytes, A_shape, B_shape, dtype_str, 
+                                      start_row, end_row, block_size=64):
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Recebido pedido de cálculo: linhas {start_row} a {end_row}")
-        # Converter listas recebidas via rede para numpy
-        A = np.array(A_data, dtype=np.float64)
-        B = np.array(B_data, dtype=np.float64)
+        
+        # Garantir que recebemos bytes (decodificar se Serpent enviou dict)
+        A_bytes = self._ensure_bytes(A_bytes)
+        B_bytes = self._ensure_bytes(B_bytes)
+        
+        # Reconstruir arrays numpy a partir dos bytes
+        dtype = np.dtype(dtype_str)
+        A = np.frombuffer(A_bytes, dtype=dtype).reshape(A_shape)
+        B = np.frombuffer(B_bytes, dtype=dtype).reshape(B_shape)
         
         m, n = A.shape
         p = B.shape[1]
@@ -120,7 +133,7 @@ class ComputationServer:
         num_rows_server = end_row - start_row
         
         if num_rows_server <= 0:
-            return []
+            return b""
 
         # -----------------------------------------
         #  CASO POUCAS LINHAS → NÃO USA SHM
@@ -129,7 +142,7 @@ class ComputationServer:
             result = np.zeros((num_rows_server, p), dtype=np.float64)
             _multiply_block_range(A, B, result, start_row, end_row, block_size, offset=start_row)
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Cálculo finalizado (local).")
-            return result.tolist()
+            return result.tobytes()
         
         # -----------------------------------------
         #       SHARED MEMORY (CORRIGIDO)
@@ -195,4 +208,4 @@ class ComputationServer:
                 pass
         
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Cálculo finalizado (shared memory).")
-        return result.tolist()
+        return result.tobytes()

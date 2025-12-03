@@ -38,22 +38,18 @@ def multiply_parallel_distributed(matA, matB, server_uris, block_size=64):
     
     valid_server_count = len(servers_info)
     
-    # Converter matrizes para listas (para transmissão Pyro)
-    # Nota: Enviar a matriz inteira é pesado, mas mantém a lógica original simplificada
+    # Converter matrizes para bytes (para transmissão eficiente Pyro)
     print("Serializando matrizes...")
-    A_data = matA.tolist()
-    B_data = matB.tolist()
+    # Não convertemos A inteiro para bytes aqui, pois vamos fatiar.
+    # Mas B vai inteiro para todos.
+    B_bytes = matB.tobytes()
+    dtype_str = str(matA.dtype)
     
     # Dividir trabalho (linhas de A) entre servidores disponíveis
     rows_per_server = m // valid_server_count
     tasks = []
     
     # Recalcular URIs baseados apenas nos que conectaram com sucesso
-    # (Assumindo que server_uris original bate com servers_info na ordem, 
-    # mas o ideal seria servers_info retornar o URI ou gerenciar ids)
-    # Para simplificar, vamos usar a lista original se todos conectaram,
-    # caso contrário precisaria filtrar server_uris.
-    
     active_uris = server_uris[:valid_server_count] 
 
     for i in range(valid_server_count):
@@ -81,13 +77,18 @@ def multiply_parallel_distributed(matA, matB, server_uris, block_size=64):
     print("\nIniciando multiplicação distribuída...")
     start_time = time.perf_counter()
     
-    def execute_task(uri, s_row, e_row, a_dat, b_dat, blk):
+    def execute_task(uri, s_row, e_row, a_chunk, b_bytes, b_shape, dt_str, blk):
         # Criar novo proxy dentro da thread
         with Pyro5.api.Proxy(uri) as server:
-            res = server.compute_partial_multiplication(
-                a_dat, b_dat, s_row, e_row, blk
+            # Serializar apenas o pedaço de A necessário
+            a_bytes = a_chunk.tobytes()
+            a_shape = a_chunk.shape
+            
+            res_bytes = server.compute_partial_multiplication(
+                a_bytes, b_bytes, a_shape, b_shape, dt_str, 
+                s_row, e_row, blk
             )
-        return s_row, e_row, res
+        return s_row, e_row, res_bytes
     
     # Executar threads
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(tasks)) as executor:
@@ -95,17 +96,27 @@ def multiply_parallel_distributed(matA, matB, server_uris, block_size=64):
             executor.submit(
                 execute_task, 
                 t['server_uri'], t['start_row'], t['end_row'], 
-                A_data[t['start_row']:t['end_row']], B_data, block_size
+                matA[t['start_row']:t['end_row']], B_bytes, matB.shape, dtype_str, block_size
             ): t for t in tasks
         }
         
         for future in concurrent.futures.as_completed(future_to_task):
             try:
-                s_row, e_row, result = future.result()
+                s_row, e_row, result_bytes = future.result()
                 
                 # Inserir o pedaço calculado na matriz final
-                if result:
-                    result_array = np.array(result, dtype=np.float64)
+                if result_bytes:
+                    # Decodificar se for dict (Serpent)
+                    if isinstance(result_bytes, dict) and 'data' in result_bytes and 'encoding' in result_bytes:
+                        if result_bytes['encoding'] == 'base64':
+                            import base64
+                            result_bytes = base64.b64decode(result_bytes['data'])
+
+                    # Reconstrói o array numpy a partir dos bytes recebidos
+                    # O shape é (linhas_processadas, colunas_B)
+                    rows_processed = e_row - s_row
+                    cols = p
+                    result_array = np.frombuffer(result_bytes, dtype=np.dtype(dtype_str)).reshape(rows_processed, cols)
                     matC[s_row:e_row, :] = result_array
             except Exception as exc:
                 print(f"  ✗ Exceção em uma tarefa: {exc}")
