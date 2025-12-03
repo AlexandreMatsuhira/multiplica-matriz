@@ -62,14 +62,17 @@ def multiply_linear(matA, matB, block_size=64):
     colunas_B = matB.shape[1]
     matC = np.zeros((linhas_A, colunas_B), dtype=np.float64)
     
-    # Warm-up para JIT compilation
     if matA.shape[0] > 10:
+        sub_rows = min(10, linhas_A)
+        sub_mid = min(10, colunas_A)
+        sub_cols = min(10, colunas_B)
         _multiply_kernel(
-            matA[:10, :10] if colunas_A >= 10 else matA[:10, :colunas_A],
-            matB[:10, :10] if colunas_B >= 10 else matB[:colunas_A, :10],
-            np.zeros((10, 10 if colunas_B >= 10 else colunas_B), dtype=np.float64),
-            min(block_size, 10)
+            matA[:sub_rows, :sub_mid],
+            matB[:sub_mid, :sub_cols],
+            np.zeros((sub_rows, sub_cols), dtype=np.float64),
+            min(block_size, sub_mid)
         )
+
     
     # Medir apenas o tempo de multiplicação
     start_time = time.perf_counter()
